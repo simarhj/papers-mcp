@@ -2,9 +2,10 @@
 
 Servidor MCP (Model Context Protocol) que guía la construcción de un artículo
 científico con estructura **IMRaD** (Introducción, Métodos, Resultados y
-Discusión), valida cada sección con reglas lógicas/heurísticas, y **persiste
-el progreso en disco** para que el contexto sobreviva entre sesiones de
-Claude Desktop.
+Discusión), valida cada sección con reglas lógicas/heurísticas, y **guarda el
+proyecto como una carpeta real en el disco del investigador** (Markdown +
+biblioteca de referencias + carpetas de apoyo), con exportación a LaTeX, PDF
+y Word.
 
 > El servidor **nunca genera contenido científico por ti**: solo guarda lo
 > que tú redactas, y valida su estructura. La redacción y las ideas siguen
@@ -49,34 +50,68 @@ Agrega esta entrada (ajusta la ruta absoluta a donde clonaste el proyecto):
 ```
 
 Reinicia Claude Desktop. Deberías ver el ícono de herramientas (🔨) con
-10 tools disponibles bajo "scientific-article-guide".
+17 tools disponibles bajo "scientific-article-guide".
 
 ## 3. Flujo de uso típico
 
-1. **`create_article`** — crea el proyecto (título + área de investigación). Devuelve un `projectId`.
+1. **`create_article`** — pide la carpeta del disco donde se guardará el proyecto (`projectPath`), y crea ahí la
+   estructura completa (ver sección 4). Devuelve un `projectId`.
 2. **`get_next_question`** — te da, una a la vez, cada pregunta obligatoria de la sección (ej. en la Introducción:
    contexto → brecha → objetivo). No avanza a la siguiente hasta tener respuesta a la actual.
 3. **`answer_section_question`** — guardas tu respuesta a esa pregunta puntual (`questionId` + `answer`). Cuando
-   respondes la última pregunta de la sección, el contenido se ensambla y se valida automáticamente.
-4. **`get_project_status`** — para ver qué secciones faltan (obligatorias vs. opcionales), cuáles están en progreso
+   respondes la última pregunta de la sección, el contenido se ensambla, se valida y se reescribe en disco
+   automáticamente.
+4. **`add_reference`** / **`list_references`** / **`generate_references_section`** — vas construyendo tu biblioteca
+   de referencias y, cuando quieras, generas la sección "Referencias" del artículo a partir de ella.
+5. **`get_project_status`** — para ver qué secciones faltan (obligatorias vs. opcionales), cuáles están en progreso
    (X/N preguntas respondidas) y cuál es el siguiente paso sugerido.
-5. **`validate_full_article`** — al final, corre validaciones cruzadas: citas vs. referencias, coherencia
+6. **`validate_full_article`** — corre validaciones cruzadas: citas vs. referencias, coherencia
    objetivo↔discusión, orden lógico de dependencias, y **bloquea** el artículo como incompleto si falta alguna
    sección obligatoria.
+7. **`export_to_latex`** / **`export_to_pdf`** / **`export_to_word`** — cuando el artículo esté listo, lo exportas
+   desde el Markdown oficial a los formatos que necesites entregar.
 
 Alternativa en modo libre: si ya tienes una sección redactada (o prefieres escribirla de una sola vez), puedes
 saltarte el Q&A y usar **`get_section_guidance`** (checklist de referencia) + **`submit_section_content`**
 (guarda y valida el texto completo). Ambos flujos son compatibles y escriben al mismo lugar.
 
-Los proyectos se guardan en `~/.scientific-article-mcp/projects/<id>.json` y
-persisten aunque cierres Claude Desktop.
+## 3.1. Dónde vive el proyecto
+
+**El proyecto se guarda como una carpeta real, en la ruta que tú elijas** (`projectPath` en `create_article`) —
+no en un directorio oculto. Ahí se crea:
+
+```
+<tu-carpeta-elegida>/
+├── article.md          # el artículo completo (Markdown, formato oficial) — se regenera solo
+├── LEEME.md             # explicación de la estructura, generada una sola vez
+├── sections/            # cada sección IMRaD en su propio .md — se regenera sola
+│   ├── 01-title.md
+│   ├── 02-abstract.md
+│   └── ...
+├── references/
+│   ├── bibliography.bib # biblioteca de referencias en BibTeX (para LaTeX)
+│   └── referencias.md   # la misma biblioteca en lista legible
+├── figures/              # tus imágenes, gráficas y tablas
+├── data/                 # tus datos crudos o procesados
+├── export/               # article.tex / article.pdf / article.docx generados
+└── .article-mcp/
+    └── project.json      # estado interno del MCP (respuestas, validaciones) — no editar a mano
+```
+
+`article.md` y `sections/*.md` se sobrescriben en cada guardado (son una vista, no la fuente de verdad editable a
+mano); `figures/`, `data/` y `references/bibliography.bib`/`referencias.md` sí son tuyos para gestionar libremente
+(este último también se actualiza al usar `add_reference`).
+
+Un índice liviano en `~/.scientific-article-mcp/index.json` guarda solo `projectId → carpeta`, para que
+`list_articles`/`get_project_status` puedan encontrar tus proyectos sin tener que recordar la ruta completa; el
+contenido real vive siempre en tu carpeta.
 
 ## 4. Herramientas (tools) expuestas
 
 | Tool | Descripción |
 |---|---|
-| `create_article` | Crea un nuevo proyecto IMRaD |
-| `list_articles` | Lista proyectos guardados con su progreso |
+| `create_article` | Crea un nuevo proyecto IMRaD en la carpeta que indiques |
+| `list_articles` | Lista proyectos guardados con su progreso y carpeta |
 | `get_project_status` | Muestra qué secciones faltan (obligatorias/opcionales) y el siguiente paso |
 | `get_section_guidance` | Checklist de preguntas guía + requisitos de una sección (vista general) |
 | `get_next_question` | Flujo guiado: siguiente pregunta obligatoria sin responder de una sección |
@@ -85,6 +120,13 @@ persisten aunque cierres Claude Desktop.
 | `validate_section` | Re-valida una sección ya guardada |
 | `validate_full_article` | Validación cruzada de todo el artículo (bloquea si faltan secciones obligatorias) |
 | `get_section_content` | Recupera el texto guardado de una sección |
+| `add_reference` | Agrega una entrada a la biblioteca de referencias del proyecto |
+| `list_references` | Lista las referencias guardadas en la biblioteca |
+| `generate_references_section` | Ensambla la sección "Referencias" a partir de la biblioteca |
+| `export_markdown` | Fuerza la regeneración de todos los archivos Markdown del proyecto |
+| `export_to_latex` | Exporta `article.md` a `export/article.tex` (requiere `pandoc`) |
+| `export_to_pdf` | Exporta `article.md` a `export/article.pdf` (requiere `pandoc` + motor LaTeX) |
+| `export_to_word` | Exporta `article.md` a `export/article.docx` (requiere `pandoc`) |
 
 ## 4.1. Secciones obligatorias
 
@@ -113,7 +155,24 @@ elementos requeridos vive en `src/schema.js`. Puedes:
 - Adaptar la estructura a otro formato (ej. quitar Métodos/Resultados para
   artículos de revisión bibliográfica, o añadir subsecciones).
 
-## 7. Pruebas
+## 7. Exportación a LaTeX / PDF / Word
+
+El formato oficial de trabajo es **Markdown** (`article.md`), pero el MCP puede convertirlo usando
+[`pandoc`](https://pandoc.org), que **no es una dependencia de npm**: debe instalarse en el sistema por separado.
+
+```bash
+# macOS
+brew install pandoc
+brew install --cask basictex   # solo necesario para exportar a PDF
+
+# Ubuntu/Debian
+sudo apt install pandoc texlive-latex-base   # texlive solo para PDF
+```
+
+Si `pandoc` (o, para PDF, un motor LaTeX) no está instalado, las herramientas `export_to_latex`/`export_to_pdf`/
+`export_to_word` devuelven un mensaje explicando qué falta instalar, en vez de fallar de forma críptica.
+
+## 8. Pruebas
 
 Hay un test end-to-end que levanta el servidor real vía stdio y ejercita el
 flujo completo:

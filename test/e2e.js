@@ -1,6 +1,8 @@
 const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
 const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
 const path = require('path');
+const os = require('os');
+const fs = require('fs');
 
 async function callTool(client, name, args) {
   const res = await client.callTool({ name, arguments: args });
@@ -21,13 +23,23 @@ async function main() {
   const tools = await client.listTools();
   console.log('Tools registrados:', tools.tools.map((t) => t.name).join(', '));
 
+  const projectPath = path.join(os.tmpdir(), `scientific-article-mcp-test-${Date.now()}`);
+  console.log('\nprojectPath de prueba:', projectPath);
+
   const createRes = await callTool(client, 'create_article', {
     title: 'Efecto del microplástico en larvas de coral',
     researchField: 'biología marina',
+    projectPath,
   });
   const idMatch = createRes.match(/projectId:\s*([a-z0-9-]+)/i);
   const projectId = idMatch[1];
   console.log('\nprojectId extraído:', projectId);
+
+  // Crear un proyecto en la misma carpeta debe reutilizar el existente, no duplicarlo
+  await callTool(client, 'create_article', {
+    title: 'Otro título cualquiera',
+    projectPath,
+  });
 
   await callTool(client, 'get_section_guidance', { projectId, section: 'introduction' });
 
@@ -114,11 +126,48 @@ async function main() {
 
   await callTool(client, 'get_project_status', { projectId });
 
+  // --- Biblioteca de referencias ---
+  await callTool(client, 'list_references', { projectId });
+  await callTool(client, 'add_reference', {
+    projectId,
+    key: 'garcia2019',
+    citation: 'García, M. (2019). Impacto de microplásticos en ecosistemas coralinos. Revista de Biología Marina, 45(2), 123-140.',
+    bibtex: '@article{garcia2019,\n  title={Impacto de microplásticos en ecosistemas coralinos},\n  author={García, M.},\n  year={2019}\n}',
+  });
+  await callTool(client, 'add_reference', {
+    projectId,
+    key: 'lopez2021',
+    citation: 'López, R. (2021). Contaminación plástica en arrecifes. Ciencia y Mar, 12(1), 55-70.',
+  });
+  await callTool(client, 'list_references', { projectId });
+  await callTool(client, 'generate_references_section', { projectId });
+
   await callTool(client, 'validate_full_article', { projectId });
 
   await callTool(client, 'list_articles', {});
 
+  // --- Verificación de archivos en disco ---
+  await callTool(client, 'export_markdown', { projectId });
+  const expectedFiles = [
+    'article.md',
+    'LEEME.md',
+    'sections/01-title.md',
+    'references/bibliography.bib',
+    'references/referencias.md',
+  ];
+  for (const rel of expectedFiles) {
+    const full = path.join(projectPath, rel);
+    if (!fs.existsSync(full)) throw new Error(`Archivo esperado no encontrado: ${full}`);
+  }
+  console.log('\n✅ Todos los archivos Markdown esperados existen en disco.');
+
+  // --- Exportadores (pandoc puede no estar instalado; solo verificamos que no truene) ---
+  await callTool(client, 'export_to_latex', { projectId });
+  await callTool(client, 'export_to_pdf', { projectId });
+  await callTool(client, 'export_to_word', { projectId });
+
   await client.close();
+  fs.rmSync(projectPath, { recursive: true, force: true });
   console.log('\n✅ Flujo de prueba completado sin errores.');
 }
 

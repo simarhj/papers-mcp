@@ -13,6 +13,8 @@ const { z } = require('zod');
 const { IMRAD_SECTIONS, SECTION_KEYS, getSectionDef } = require('./schema');
 const store = require('./store');
 const { validateSection, validateArticle } = require('./validators');
+const markdown = require('./markdown');
+const exporters = require('./exporters');
 
 const server = new McpServer({
   name: 'scientific-article-guide',
@@ -30,6 +32,10 @@ function fmtSectionList() {
 function findNextQuestion(def, sectionData) {
   const answers = sectionData.answers || {};
   return def.questions.find((q) => !(answers[q.id] || '').trim()) || null;
+}
+
+function notFound(projectId) {
+  return { content: [{ type: 'text', text: `No existe un proyecto con id "${projectId}".` }], isError: true };
 }
 
 function fmtValidation(result) {
@@ -56,21 +62,54 @@ server.registerTool(
   {
     title: 'Crear nuevo artículo científico',
     description:
-      'Inicia un nuevo proyecto de artículo científico con estructura IMRaD y persistencia local. ' +
-      'Devuelve un projectId que debe usarse en el resto de las herramientas.',
+      'Inicia un nuevo proyecto de artículo científico con estructura IMRaD en la carpeta del disco que indique ' +
+      'el investigador (projectPath). Antes de llamar a esta herramienta, pregúntale al investigador en qué ' +
+      'carpeta quiere trabajar el artículo. Crea ahí el artículo en Markdown, una biblioteca de referencias y ' +
+      'carpetas de apoyo (figuras, datos, exportaciones). Devuelve un projectId que debe usarse en el resto de las herramientas.',
     inputSchema: {
       title: z.string().min(3).describe('Título de trabajo del artículo (puede refinarse después)'),
       researchField: z.string().optional().describe('Área/disciplina del estudio, ej. "biología marina", "ciencias de la computación"'),
+      projectPath: z
+        .string()
+        .min(1)
+        .describe(
+          'Ruta absoluta (o con "~") de la carpeta del disco del investigador donde se creará y guardará el proyecto. ' +
+            'Se crea si no existe. Pregúntaselo al investigador antes de llamar a esta herramienta.'
+        ),
     },
   },
-  async ({ title, researchField }) => {
-    const project = store.createProject({ title, researchField });
+  async ({ title, researchField, projectPath }) => {
+    const existing = store.findProjectAtPath(projectPath);
+    if (existing) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text:
+              `Ya existe un proyecto en esa carpeta: **"${existing.title}"** (projectId: ${existing.id}).\n` +
+              `Usa ese projectId para continuar (revisa "get_project_status") en lugar de crear uno nuevo.`,
+          },
+        ],
+      };
+    }
+
+    const project = store.createProject({ title, researchField, projectPath });
+    markdown.syncAllMarkdown(project);
+    markdown.writeBibliographyFiles(project);
+
     return {
       content: [
         {
           type: 'text',
           text:
-            `Proyecto creado. **projectId: ${project.id}**\n\n` +
+            `Proyecto creado. **projectId: ${project.id}**\n` +
+            `Carpeta del proyecto: ${project.projectPath}\n\n` +
+            `Estructura creada ahí:\n` +
+            `- \`article.md\` — el artículo completo (se actualiza automáticamente con cada guardado)\n` +
+            `- \`sections/\` — una sección por archivo\n` +
+            `- \`references/\` — biblioteca de referencias (bibliography.bib, referencias.md)\n` +
+            `- \`figures/\`, \`data/\` — para tus archivos de soporte\n` +
+            `- \`export/\` — LaTeX/PDF/Word generados con las herramientas de exportación\n\n` +
             `Estructura a seguir (IMRaD), todas las secciones son obligatorias salvo que se marquen como opcionales:\n${fmtSectionList()}\n\n` +
             `Recomendación: empieza por la Introducción (o el Resumen al final, una vez tengas resultados). ` +
             `Usa "get_next_question" con este projectId y la clave de sección para que te pregunte, paso a paso, ` +
@@ -97,7 +136,11 @@ server.registerTool(
       return { content: [{ type: 'text', text: 'No hay proyectos guardados todavía. Usa "create_article" para empezar uno.' }] };
     }
     const text = projects
-      .map((p) => `- **${p.title}** (id: ${p.id}) — ${p.progress} — última actualización: ${p.updatedAt}`)
+      .map((p) =>
+        p.missing
+          ? `- **${p.title}** (id: ${p.id}) — ⚠️ carpeta no encontrada: ${p.projectPath}`
+          : `- **${p.title}** (id: ${p.id}) — ${p.progress} — 📁 ${p.projectPath} — última actualización: ${p.updatedAt}`
+      )
       .join('\n');
     return { content: [{ type: 'text', text }] };
   }
@@ -117,7 +160,7 @@ server.registerTool(
     const project = store.getProject(projectId);
     if (!project) return { content: [{ type: 'text', text: `No existe un proyecto con id "${projectId}".` }], isError: true };
 
-    const lines = [`# Estado de "${project.title}" (${projectId})\n`];
+    const lines = [`# Estado de "${project.title}" (${projectId})`, `Carpeta: ${project.projectPath}\n`];
     for (const def of IMRAD_SECTIONS) {
       const section = project.sections[def.key] || {};
       const content = section.content || '';
@@ -329,13 +372,14 @@ server.registerTool(
     const result = validateSection(section, assembled, project);
     sectionData.lastValidation = result;
     store.saveProject(project);
+    markdown.syncAllMarkdown(project);
 
     return {
       content: [
         {
           type: 'text',
           text:
-            `✅ Todas las preguntas de "${def.title}" fueron respondidas. Contenido ensamblado y guardado.\n\n` +
+            `✅ Todas las preguntas de "${def.title}" fueron respondidas. Contenido ensamblado y guardado en ${project.projectPath}.\n\n` +
             `**Borrador ensamblado:**\n${assembled}\n\n` +
             `${fmtValidation(result)}\n\n` +
             `Si quieres pulir la redacción (unir frases, mejorar transiciones), puedes reenviar la versión final con "submit_section_content".`,
@@ -369,8 +413,9 @@ server.registerTool(
     const result = validateSection(section, content, project);
     project.sections[section].lastValidation = result;
     store.saveProject(project);
+    markdown.syncAllMarkdown(project);
 
-    return { content: [{ type: 'text', text: `Contenido guardado.\n\n${fmtValidation(result)}` }] };
+    return { content: [{ type: 'text', text: `Contenido guardado en ${project.projectPath}.\n\n${fmtValidation(result)}` }] };
   }
 );
 
@@ -459,6 +504,204 @@ server.registerTool(
       ],
     };
   }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL: add_reference
+// ---------------------------------------------------------------------------
+server.registerTool(
+  'add_reference',
+  {
+    title: 'Agregar referencia a la biblioteca',
+    description:
+      'Agrega una entrada a la biblioteca de referencias bibliográficas del proyecto (carpeta "references/" dentro ' +
+      'de la carpeta del proyecto). Esto NO reemplaza el contenido de la sección "Referencias" del artículo; usa ' +
+      '"generate_references_section" para ensamblarla a partir de la biblioteca.',
+    inputSchema: {
+      projectId: z.string(),
+      key: z.string().min(1).describe('Clave corta única para citar esta referencia, ej. "smith2020"'),
+      citation: z.string().min(1).describe('Referencia formateada y legible, en el estilo que uses (APA, IEEE, Vancouver...)'),
+      bibtex: z.string().optional().describe('Entrada BibTeX completa (opcional), útil para la exportación a LaTeX/PDF'),
+    },
+  },
+  async ({ projectId, key, citation, bibtex }) => {
+    const project = store.getProject(projectId);
+    if (!project) return notFound(projectId);
+
+    project.bibliography[key] = { citation, bibtex: bibtex || null, addedAt: new Date().toISOString() };
+    store.saveProject(project);
+    markdown.writeBibliographyFiles(project);
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text:
+            `Referencia "${key}" guardada (${Object.keys(project.bibliography).length} en total). ` +
+            `Actualizado: ${project.projectPath}/references/bibliography.bib y referencias.md.`,
+        },
+      ],
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL: list_references
+// ---------------------------------------------------------------------------
+server.registerTool(
+  'list_references',
+  {
+    title: 'Listar referencias de la biblioteca',
+    description: 'Lista las entradas guardadas en la biblioteca de referencias del proyecto.',
+    inputSchema: { projectId: z.string() },
+  },
+  async ({ projectId }) => {
+    const project = store.getProject(projectId);
+    if (!project) return notFound(projectId);
+
+    const entries = Object.entries(project.bibliography || {});
+    if (entries.length === 0) {
+      return { content: [{ type: 'text', text: 'No hay referencias guardadas todavía. Usa "add_reference" para agregar la primera.' }] };
+    }
+    const text = entries
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, e]) => `- **[${k}]** ${e.citation}${e.bibtex ? ' _(con BibTeX)_' : ''}`)
+      .join('\n');
+    return { content: [{ type: 'text', text }] };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL: generate_references_section
+// ---------------------------------------------------------------------------
+server.registerTool(
+  'generate_references_section',
+  {
+    title: 'Generar la sección Referencias desde la biblioteca',
+    description:
+      'Ensambla y guarda el contenido de la sección "Referencias" del artículo a partir de todas las entradas ' +
+      'de la biblioteca de referencias (agregadas con "add_reference"), y corre la validación.',
+    inputSchema: { projectId: z.string() },
+  },
+  async ({ projectId }) => {
+    const project = store.getProject(projectId);
+    if (!project) return notFound(projectId);
+
+    const entries = Object.entries(project.bibliography || {});
+    if (entries.length === 0) {
+      return {
+        content: [{ type: 'text', text: 'La biblioteca de referencias está vacía. Agrega referencias con "add_reference" antes de generar esta sección.' }],
+        isError: true,
+      };
+    }
+
+    const content = entries
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([, e]) => e.citation)
+      .join('\n\n');
+
+    project.sections.references.content = content;
+    project.sections.references.updatedAt = new Date().toISOString();
+    const result = validateSection('references', content, project);
+    project.sections.references.lastValidation = result;
+    store.saveProject(project);
+    markdown.syncAllMarkdown(project);
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `Sección "Referencias" generada a partir de ${entries.length} entradas de la biblioteca.\n\n${fmtValidation(result)}`,
+        },
+      ],
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL: export_markdown
+// ---------------------------------------------------------------------------
+server.registerTool(
+  'export_markdown',
+  {
+    title: 'Regenerar los archivos Markdown del proyecto',
+    description:
+      'Fuerza la regeneración de article.md, sections/*.md y la biblioteca de referencias a partir del estado ' +
+      'guardado. Normalmente no hace falta llamarla manualmente (se actualizan solas con cada guardado), pero es ' +
+      'útil tras cambios en el schema o si los archivos se editaron a mano por error.',
+    inputSchema: { projectId: z.string() },
+  },
+  async ({ projectId }) => {
+    const project = store.getProject(projectId);
+    if (!project) return notFound(projectId);
+
+    markdown.syncAllMarkdown(project);
+    markdown.writeBibliographyFiles(project);
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text:
+            `Markdown actualizado en: ${project.projectPath}\n` +
+            `- article.md\n- sections/*.md\n- references/bibliography.bib\n- references/referencias.md`,
+        },
+      ],
+    };
+  }
+);
+
+async function handleExport(projectId, format, label) {
+  const project = store.getProject(projectId);
+  if (!project) return notFound(projectId);
+
+  markdown.syncAllMarkdown(project);
+  const result = await exporters.exportArticle(project, format);
+
+  if (!result.ok) {
+    return { content: [{ type: 'text', text: `No se pudo exportar a ${label}:\n\n${result.error}` }], isError: true };
+  }
+  return { content: [{ type: 'text', text: `Exportado a ${label}: ${result.outputPath}` }] };
+}
+
+// ---------------------------------------------------------------------------
+// TOOL: export_to_latex
+// ---------------------------------------------------------------------------
+server.registerTool(
+  'export_to_latex',
+  {
+    title: 'Exportar el artículo a LaTeX',
+    description: 'Convierte article.md a LaTeX (export/article.tex) usando pandoc. Requiere tener pandoc instalado.',
+    inputSchema: { projectId: z.string() },
+  },
+  async ({ projectId }) => handleExport(projectId, 'latex', 'LaTeX')
+);
+
+// ---------------------------------------------------------------------------
+// TOOL: export_to_pdf
+// ---------------------------------------------------------------------------
+server.registerTool(
+  'export_to_pdf',
+  {
+    title: 'Exportar el artículo a PDF',
+    description:
+      'Convierte article.md a PDF (export/article.pdf) usando pandoc. Requiere pandoc y un motor LaTeX instalados en el sistema.',
+    inputSchema: { projectId: z.string() },
+  },
+  async ({ projectId }) => handleExport(projectId, 'pdf', 'PDF')
+);
+
+// ---------------------------------------------------------------------------
+// TOOL: export_to_word
+// ---------------------------------------------------------------------------
+server.registerTool(
+  'export_to_word',
+  {
+    title: 'Exportar el artículo a Word',
+    description: 'Convierte article.md a Word (export/article.docx) usando pandoc. Requiere tener pandoc instalado.',
+    inputSchema: { projectId: z.string() },
+  },
+  async ({ projectId }) => handleExport(projectId, 'docx', 'Word (.docx)')
 );
 
 // ---------------------------------------------------------------------------
