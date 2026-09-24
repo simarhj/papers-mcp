@@ -49,16 +49,24 @@ Agrega esta entrada (ajusta la ruta absoluta a donde clonaste el proyecto):
 ```
 
 Reinicia Claude Desktop. Deberías ver el ícono de herramientas (🔨) con
-8 tools disponibles bajo "scientific-article-guide".
+10 tools disponibles bajo "scientific-article-guide".
 
 ## 3. Flujo de uso típico
 
 1. **`create_article`** — crea el proyecto (título + área de investigación). Devuelve un `projectId`.
-2. **`get_section_guidance`** — para cada sección, pide las preguntas guía y los elementos que se validarán.
-3. Redactas la sección tú mismo (o dictándosela a Claude en la conversación, con tus datos/ideas).
-4. **`submit_section_content`** — guarda el contenido y corre la validación automáticamente.
-5. **`get_project_status`** — para ver qué falta y cuál es el siguiente paso sugerido.
-6. **`validate_full_article`** — al final, corre validaciones cruzadas: citas vs. referencias, coherencia objetivo↔discusión, orden lógico de dependencias.
+2. **`get_next_question`** — te da, una a la vez, cada pregunta obligatoria de la sección (ej. en la Introducción:
+   contexto → brecha → objetivo). No avanza a la siguiente hasta tener respuesta a la actual.
+3. **`answer_section_question`** — guardas tu respuesta a esa pregunta puntual (`questionId` + `answer`). Cuando
+   respondes la última pregunta de la sección, el contenido se ensambla y se valida automáticamente.
+4. **`get_project_status`** — para ver qué secciones faltan (obligatorias vs. opcionales), cuáles están en progreso
+   (X/N preguntas respondidas) y cuál es el siguiente paso sugerido.
+5. **`validate_full_article`** — al final, corre validaciones cruzadas: citas vs. referencias, coherencia
+   objetivo↔discusión, orden lógico de dependencias, y **bloquea** el artículo como incompleto si falta alguna
+   sección obligatoria.
+
+Alternativa en modo libre: si ya tienes una sección redactada (o prefieres escribirla de una sola vez), puedes
+saltarte el Q&A y usar **`get_section_guidance`** (checklist de referencia) + **`submit_section_content`**
+(guarda y valida el texto completo). Ambos flujos son compatibles y escriben al mismo lugar.
 
 Los proyectos se guardan en `~/.scientific-article-mcp/projects/<id>.json` y
 persisten aunque cierres Claude Desktop.
@@ -69,12 +77,21 @@ persisten aunque cierres Claude Desktop.
 |---|---|
 | `create_article` | Crea un nuevo proyecto IMRaD |
 | `list_articles` | Lista proyectos guardados con su progreso |
-| `get_project_status` | Muestra qué secciones faltan y el siguiente paso |
-| `get_section_guidance` | Preguntas guía + requisitos de una sección |
-| `submit_section_content` | Guarda contenido de una sección + valida |
+| `get_project_status` | Muestra qué secciones faltan (obligatorias/opcionales) y el siguiente paso |
+| `get_section_guidance` | Checklist de preguntas guía + requisitos de una sección (vista general) |
+| `get_next_question` | Flujo guiado: siguiente pregunta obligatoria sin responder de una sección |
+| `answer_section_question` | Guarda la respuesta a una pregunta puntual; ensambla y valida al completar la sección |
+| `submit_section_content` | Modo libre: guarda contenido completo de una sección de una vez + valida |
 | `validate_section` | Re-valida una sección ya guardada |
-| `validate_full_article` | Validación cruzada de todo el artículo |
+| `validate_full_article` | Validación cruzada de todo el artículo (bloquea si faltan secciones obligatorias) |
 | `get_section_content` | Recupera el texto guardado de una sección |
+
+## 4.1. Secciones obligatorias
+
+Por defecto, **las 9 secciones IMRaD son obligatorias**: `validate_full_article` marca el artículo como
+incompleto (❌ bloqueante) mientras alguna tenga contenido vacío. Puedes eximir una sección puntual marcándola
+como `optional: true` en `src/schema.js` (por ejemplo, para artículos de revisión sin Métodos/Resultados
+experimentales); las secciones opcionales vacías solo generan una advertencia, no bloquean la validación.
 
 ## 5. Naturaleza de las validaciones
 

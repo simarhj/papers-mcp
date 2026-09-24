@@ -44,6 +44,7 @@ function createProject({ title, articleType = 'IMRaD', researchField = null }) {
   for (const key of SECTION_KEYS) {
     sections[key] = {
       content: '',
+      answers: {},
       lastValidation: null,
       updatedAt: null,
     };
@@ -63,11 +64,23 @@ function createProject({ title, articleType = 'IMRaD', researchField = null }) {
   return project;
 }
 
+/** Rellena campos que puedan faltar en proyectos guardados con una versión anterior del schema. */
+function normalizeProject(project) {
+  for (const key of SECTION_KEYS) {
+    if (!project.sections[key]) {
+      project.sections[key] = { content: '', answers: {}, lastValidation: null, updatedAt: null };
+    } else if (!project.sections[key].answers) {
+      project.sections[key].answers = {};
+    }
+  }
+  return project;
+}
+
 function getProject(id) {
   ensureDirs();
   const p = projectPath(id);
   if (!fs.existsSync(p)) return null;
-  return JSON.parse(fs.readFileSync(p, 'utf-8'));
+  return normalizeProject(JSON.parse(fs.readFileSync(p, 'utf-8')));
 }
 
 function saveProject(project) {

@@ -25,7 +25,11 @@ function validateSection(sectionKey, content, project) {
   const wordCount = countWords(content);
 
   if (!content || !content.trim()) {
-    issues.push('La sección está vacía. Aún no se ha recibido contenido del investigador.');
+    if (def.optional) {
+      warnings.push('Sección opcional. Aún no se ha recibido contenido del investigador.');
+      return { valid: true, issues, warnings, wordCount: 0, section: def.title };
+    }
+    issues.push('La sección es obligatoria y está vacía. Aún no se ha recibido contenido del investigador.');
     return { valid: false, issues, warnings, wordCount: 0, section: def.title };
   }
 
@@ -127,11 +131,31 @@ function validateArticle(project) {
     if (!result.valid) report.overallValid = false;
   }
 
-  if (report.missingSections.length > 0) {
+  const missingRequired = report.missingSections.filter((key) => !getSectionDef(key).optional);
+  const missingOptional = report.missingSections.filter((key) => getSectionDef(key).optional);
+
+  if (missingRequired.length > 0) {
     report.crossChecks.push({
-      check: 'Secciones completas',
+      check: 'Secciones obligatorias completas',
+      status: 'issue',
+      detail:
+        `Faltan secciones obligatorias por completar: ${missingRequired.map((k) => getSectionDef(k).title).join(', ')}. ` +
+        `El artículo no se considera completo hasta que todas tengan contenido.`,
+    });
+    report.overallValid = false;
+  } else {
+    report.crossChecks.push({
+      check: 'Secciones obligatorias completas',
+      status: 'ok',
+      detail: 'Todas las secciones obligatorias tienen contenido.',
+    });
+  }
+
+  if (missingOptional.length > 0) {
+    report.crossChecks.push({
+      check: 'Secciones opcionales pendientes',
       status: 'warning',
-      detail: `Faltan por completar: ${report.missingSections.join(', ')}.`,
+      detail: `Secciones opcionales sin completar (no bloquean el artículo): ${missingOptional.map((k) => getSectionDef(k).title).join(', ')}.`,
     });
   }
 

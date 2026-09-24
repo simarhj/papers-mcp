@@ -31,6 +31,64 @@ async function main() {
 
   await callTool(client, 'get_section_guidance', { projectId, section: 'introduction' });
 
+  // --- Flujo guiado de preguntas secuenciales (get_next_question / answer_section_question) ---
+
+  // Sección de una sola pregunta: título
+  await callTool(client, 'get_next_question', { projectId, section: 'title' });
+  await callTool(client, 'answer_section_question', {
+    projectId,
+    section: 'title',
+    questionId: 'title_text',
+    answer: 'Efecto de la exposición a microplásticos en la supervivencia de larvas de Acropora cervicornis',
+  });
+  // Ya está completa: get_next_question debe avisar que hay contenido guardado, no volver a preguntar
+  await callTool(client, 'get_next_question', { projectId, section: 'title' });
+
+  // Sección de varias preguntas: keywords (una sola pregunta) y abstract (varias), probando progreso parcial
+  await callTool(client, 'get_next_question', { projectId, section: 'abstract' });
+  await callTool(client, 'answer_section_question', {
+    projectId,
+    section: 'abstract',
+    questionId: 'context',
+    answer: 'Los microplásticos contaminan los ecosistemas marinos y afectan a organismos sensibles como los corales.',
+  });
+  // Estado a mitad de camino: debe mostrarse "en progreso" en get_project_status
+  await callTool(client, 'get_project_status', { projectId });
+
+  // questionId inválido: debe devolver error controlado, no lanzar excepción
+  await callTool(client, 'answer_section_question', {
+    projectId,
+    section: 'abstract',
+    questionId: 'no-existe',
+    answer: 'x',
+  });
+
+  await callTool(client, 'answer_section_question', {
+    projectId,
+    section: 'abstract',
+    questionId: 'objective',
+    answer: 'Evaluar el efecto de distintas concentraciones de microplástico en la supervivencia larvaria.',
+  });
+  await callTool(client, 'answer_section_question', {
+    projectId,
+    section: 'abstract',
+    questionId: 'method',
+    answer: 'Se realizó un experimento controlado en laboratorio con tres concentraciones de microplástico.',
+  });
+  await callTool(client, 'answer_section_question', {
+    projectId,
+    section: 'abstract',
+    questionId: 'result',
+    answer: 'Se encontró una reducción significativa de la supervivencia en las concentraciones más altas.',
+  });
+  // Última pregunta: al responderla debe ensamblar el contenido y validarlo automáticamente
+  await callTool(client, 'answer_section_question', {
+    projectId,
+    section: 'abstract',
+    questionId: 'conclusion',
+    answer: 'Esto sugiere que la contaminación por microplástico representa un riesgo para la regeneración de arrecifes.',
+  });
+
   // Introducción DELIBERADAMENTE incompleta (sin objetivo) para probar que la validación lo detecte
   await callTool(client, 'submit_section_content', {
     projectId,

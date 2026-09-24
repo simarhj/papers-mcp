@@ -5,10 +5,15 @@
  *  - key: identificador interno
  *  - title: nombre visible
  *  - order: posición esperada (para dependencias de flujo)
+ *  - optional: si es false (default), la sección es OBLIGATORIA y bloquea
+ *    "validate_full_article" mientras esté vacía. Cambiar a true para
+ *    adaptar la plantilla (ej. artículos de revisión sin Métodos/Resultados).
  *  - minWords / maxWords: rango recomendado
  *  - dependsOn: secciones que deberían existir antes de considerar esta "lista"
  *  - requiredElements: heurísticas de contenido que se buscan vía regex/keywords
- *  - guidance: preguntas guía que se le devuelven al investigador para redactar
+ *  - guidance: preguntas de autoevaluación (para revisar la sección ya escrita)
+ *  - questions: preguntas secuenciales que el MCP hace al investigador, una a
+ *    la vez, para construir el contenido de la sección punto por punto
  */
 
 const kw = (...words) => new RegExp(words.join('|'), 'i');
@@ -18,6 +23,7 @@ const IMRAD_SECTIONS = [
     key: 'title',
     title: 'Título',
     order: 1,
+    optional: false,
     minWords: 4,
     maxWords: 25,
     dependsOn: [],
@@ -27,11 +33,20 @@ const IMRAD_SECTIONS = [
       '¿Evita jerga innecesaria y abreviaturas no explicadas?',
       '¿Es específico? (evita títulos genéricos tipo "Estudio sobre X")',
     ],
+    questions: [
+      {
+        id: 'title_text',
+        prompt:
+          '¿Cuál es el título del artículo? Debe reflejar la pregunta o hallazgo principal, ' +
+          'ser específico (evita "Estudio sobre X") y no usar abreviaturas sin explicar.',
+      },
+    ],
   },
   {
     key: 'abstract',
     title: 'Resumen / Abstract',
     order: 2,
+    optional: false,
     minWords: 120,
     maxWords: 350,
     dependsOn: [],
@@ -46,11 +61,19 @@ const IMRAD_SECTIONS = [
       '¿Puede leerse de forma independiente, sin necesitar el resto del artículo?',
       '¿Evita citas bibliográficas y abreviaturas no estándar?',
     ],
+    questions: [
+      { id: 'context', prompt: '¿Cuál es el contexto o problema que motiva este estudio? (1-2 frases)' },
+      { id: 'objective', prompt: '¿Cuál es el objetivo o propósito del estudio?' },
+      { id: 'method', prompt: '¿Qué método o diseño se usó? (resúmelo en una frase)' },
+      { id: 'result', prompt: '¿Cuál es el resultado clave encontrado?' },
+      { id: 'conclusion', prompt: '¿Cuál es la conclusión o implicación principal?' },
+    ],
   },
   {
     key: 'keywords',
     title: 'Palabras clave',
     order: 3,
+    optional: false,
     minWords: 3,
     maxWords: 8,
     dependsOn: [],
@@ -59,11 +82,18 @@ const IMRAD_SECTIONS = [
       '¿Son entre 3 y 8 términos?',
       '¿Reflejan los conceptos centrales usados por bases de datos indexadoras (no genéricos)?',
     ],
+    questions: [
+      {
+        id: 'keywords_list',
+        prompt: 'Escribe entre 3 y 8 palabras clave (términos centrales del estudio), separadas por comas.',
+      },
+    ],
   },
   {
     key: 'introduction',
     title: 'Introducción',
     order: 4,
+    optional: false,
     minWords: 300,
     maxWords: 1200,
     dependsOn: [],
@@ -77,11 +107,17 @@ const IMRAD_SECTIONS = [
       '¿Identifica claramente qué falta en el conocimiento actual (la "brecha")?',
       '¿Termina con un objetivo o hipótesis explícita y verificable?',
     ],
+    questions: [
+      { id: 'context', prompt: '¿Cuál es el contexto general del tema y por qué es relevante? Incluye qué muestran los estudios previos.' },
+      { id: 'gap', prompt: '¿Qué falta en el conocimiento actual sobre este tema? (la "brecha" que tu estudio busca cerrar)' },
+      { id: 'objective', prompt: '¿Cuál es el objetivo o hipótesis explícita de tu estudio?' },
+    ],
   },
   {
     key: 'methods',
     title: 'Métodos',
     order: 5,
+    optional: false,
     minWords: 250,
     maxWords: 1500,
     dependsOn: ['introduction'],
@@ -97,11 +133,18 @@ const IMRAD_SECTIONS = [
       '¿Explica el procedimiento paso a paso?',
       '¿Especifica cómo se analizaron los datos (pruebas estadísticas, software, criterios)?',
     ],
+    questions: [
+      { id: 'design', prompt: '¿Cuál es el diseño del estudio? (experimental, observacional, cualitativo, cuantitativo, etc.)' },
+      { id: 'sample', prompt: '¿Cuál es la población, muestra o materiales utilizados? Sé preciso (n, criterios de inclusión, etc.)' },
+      { id: 'procedure', prompt: '¿Cuál fue el procedimiento, paso a paso, para poder replicarlo?' },
+      { id: 'analysis', prompt: '¿Cómo se analizaron los datos? (pruebas estadísticas, software, criterios)' },
+    ],
   },
   {
     key: 'results',
     title: 'Resultados',
     order: 6,
+    optional: false,
     minWords: 200,
     maxWords: 1500,
     dependsOn: ['methods'],
@@ -113,11 +156,20 @@ const IMRAD_SECTIONS = [
       '¿Incluye datos concretos (cifras, valores estadísticos, tablas o figuras referenciadas)?',
       '¿Sigue el mismo orden en que se plantearon los objetivos/métodos?',
     ],
+    questions: [
+      {
+        id: 'findings',
+        prompt:
+          '¿Cuáles son los hallazgos principales? Preséntalos de forma objetiva (sin interpretarlos aún) ' +
+          'e incluye datos concretos: cifras, valores estadísticos, o referencias a tablas/figuras.',
+      },
+    ],
   },
   {
     key: 'discussion',
     title: 'Discusión',
     order: 7,
+    optional: false,
     minWords: 300,
     maxWords: 1500,
     dependsOn: ['results', 'introduction'],
@@ -132,11 +184,18 @@ const IMRAD_SECTIONS = [
       '¿Reconoce limitaciones del estudio?',
       '¿Señala implicaciones prácticas/teóricas o líneas futuras?',
     ],
+    questions: [
+      { id: 'interpretation', prompt: '¿Cómo interpretas los resultados? ¿Qué significan en relación con tu objetivo?' },
+      { id: 'comparison', prompt: '¿Cómo se comparan tus resultados con estudios previos? Incluye citas, ej. (Autor, Año).' },
+      { id: 'limitations', prompt: '¿Cuáles son las limitaciones de tu estudio?' },
+      { id: 'implications', prompt: '¿Cuáles son las implicaciones prácticas/teóricas, o qué trabajo futuro sugieres?' },
+    ],
   },
   {
     key: 'conclusion',
     title: 'Conclusión',
     order: 8,
+    optional: false,
     minWords: 80,
     maxWords: 400,
     dependsOn: ['discussion'],
@@ -146,11 +205,20 @@ const IMRAD_SECTIONS = [
       '¿Evita introducir información o citas nuevas?',
       '¿Es concisa y no repite literalmente la discusión?',
     ],
+    questions: [
+      {
+        id: 'summary',
+        prompt:
+          '¿Cuál es el hallazgo principal, expresado en relación directa con el objetivo planteado en la introducción? ' +
+          '(sin introducir información o citas nuevas)',
+      },
+    ],
   },
   {
     key: 'references',
     title: 'Referencias',
     order: 9,
+    optional: false,
     minWords: 0,
     maxWords: null,
     dependsOn: [],
@@ -158,6 +226,14 @@ const IMRAD_SECTIONS = [
     guidance: [
       '¿Todas las citas usadas en el cuerpo del texto aparecen en esta lista (y viceversa)?',
       '¿El formato es consistente en todas las entradas (mismo estilo: APA, IEEE, Vancouver...)?',
+    ],
+    questions: [
+      {
+        id: 'list',
+        prompt:
+          'Pega la lista completa de referencias (una por línea) en un formato consistente (APA, IEEE, Vancouver...), ' +
+          'incluyendo todas las citas usadas en el cuerpo del artículo.',
+      },
     ],
   },
 ];

@@ -27,6 +27,11 @@ function fmtSectionList() {
   ).join('\n');
 }
 
+function findNextQuestion(def, sectionData) {
+  const answers = sectionData.answers || {};
+  return def.questions.find((q) => !(answers[q.id] || '').trim()) || null;
+}
+
 function fmtValidation(result) {
   const lines = [`## Validación: ${result.section}`, `Palabras: ${result.wordCount}${result.minWords ? ` (mínimo ${result.minWords})` : ''}`];
   if (result.issues?.length) {
@@ -66,9 +71,10 @@ server.registerTool(
           type: 'text',
           text:
             `Proyecto creado. **projectId: ${project.id}**\n\n` +
-            `Estructura a seguir (IMRaD):\n${fmtSectionList()}\n\n` +
+            `Estructura a seguir (IMRaD), todas las secciones son obligatorias salvo que se marquen como opcionales:\n${fmtSectionList()}\n\n` +
             `Recomendación: empieza por la Introducción (o el Resumen al final, una vez tengas resultados). ` +
-            `Usa "get_section_guidance" con este projectId y la clave de sección para obtener preguntas guía.`,
+            `Usa "get_next_question" con este projectId y la clave de sección para que te pregunte, paso a paso, ` +
+            `por cada punto que debe cubrir esa sección.`,
         },
       ],
     };
@@ -113,14 +119,36 @@ server.registerTool(
 
     const lines = [`# Estado de "${project.title}" (${projectId})\n`];
     for (const def of IMRAD_SECTIONS) {
-      const content = project.sections[def.key]?.content || '';
-      const status = content.trim() ? '✅ con contenido' : '⬜ vacía';
-      lines.push(`${def.order}. ${def.title} — ${status}`);
+      const section = project.sections[def.key] || {};
+      const content = section.content || '';
+      const answeredCount = Object.keys(section.answers || {}).filter((k) => (section.answers[k] || '').trim()).length;
+      const totalQuestions = def.questions.length;
+      const tag = def.optional ? '(opcional)' : '(obligatoria)';
+
+      let status;
+      if (content.trim()) {
+        status = '✅ con contenido';
+      } else if (answeredCount > 0) {
+        status = `🟡 en progreso (${answeredCount}/${totalQuestions} preguntas respondidas)`;
+      } else {
+        status = '⬜ vacía';
+      }
+      lines.push(`${def.order}. ${def.title} ${tag} — ${status}`);
     }
 
-    const nextEmpty = IMRAD_SECTIONS.find((def) => !(project.sections[def.key]?.content || '').trim());
-    if (nextEmpty) {
-      lines.push(`\n**Siguiente paso sugerido:** trabajar en "${nextEmpty.title}" (clave: "${nextEmpty.key}").`);
+    const missingRequired = IMRAD_SECTIONS.filter((def) => !def.optional && !(project.sections[def.key]?.content || '').trim());
+    const missingOptional = IMRAD_SECTIONS.filter((def) => def.optional && !(project.sections[def.key]?.content || '').trim());
+
+    if (missingRequired.length > 0) {
+      lines.push(
+        `\n**Siguiente paso sugerido:** trabajar en "${missingRequired[0].title}" (clave: "${missingRequired[0].key}"), ` +
+          `es una sección obligatoria. Usa "get_next_question" para que te guíe pregunta por pregunta.`
+      );
+    } else if (missingOptional.length > 0) {
+      lines.push(
+        `\n**Todas las secciones obligatorias tienen contenido.** Quedan secciones opcionales sin completar: ` +
+          `${missingOptional.map((d) => d.title).join(', ')}. Puedes completarlas o ejecutar "validate_full_article".`
+      );
     } else {
       lines.push('\n**Todas las secciones tienen contenido.** Ejecuta "validate_full_article" para una revisión integral.');
     }
@@ -137,8 +165,8 @@ server.registerTool(
   {
     title: 'Obtener guía para una sección',
     description:
-      'Devuelve las preguntas guía y requisitos estructurales de una sección específica, ' +
-      'para ayudar al investigador a redactarla con sus propias palabras.',
+      'Devuelve de un vistazo todas las preguntas guía y requisitos estructurales de una sección (útil como resumen/checklist). ' +
+      'Para construir el contenido paso a paso, con una pregunta obligatoria a la vez, usa "get_next_question" en su lugar.',
     inputSchema: { projectId: z.string(), section: sectionEnum },
   },
   async ({ projectId, section }) => {
@@ -153,7 +181,7 @@ server.registerTool(
       .map((dep) => `- "${getSectionDef(dep).title}" todavía está vacía; normalmente conviene completarla antes.`);
 
     const lines = [
-      `# Guía para: ${def.title}`,
+      `# Guía para: ${def.title} ${def.optional ? '(opcional)' : '(obligatoria)'}`,
       `Extensión recomendada: ${def.minWords}${def.maxWords ? `–${def.maxWords}` : '+'} palabras.\n`,
       '**Preguntas guía para redactar (con tus propias palabras/datos, no copiar de otras fuentes):**',
       ...def.guidance.map((g) => `- ${g}`),
@@ -179,15 +207,156 @@ server.registerTool(
 );
 
 // ---------------------------------------------------------------------------
+// TOOL: get_next_question
+// ---------------------------------------------------------------------------
+server.registerTool(
+  'get_next_question',
+  {
+    title: 'Obtener la siguiente pregunta de una sección',
+    description:
+      'Flujo guiado recomendado: devuelve la siguiente pregunta sin responder de una sección, una a la vez, ' +
+      'para que el investigador construya el contenido punto por punto. Úsala junto con "answer_section_question".',
+    inputSchema: { projectId: z.string(), section: sectionEnum },
+  },
+  async ({ projectId, section }) => {
+    const project = store.getProject(projectId);
+    if (!project) return { content: [{ type: 'text', text: `No existe un proyecto con id "${projectId}".` }], isError: true };
+
+    const def = getSectionDef(section);
+    const sectionData = project.sections[section];
+
+    if (sectionData.content.trim()) {
+      const wc = sectionData.content.trim().split(/\s+/).length;
+      return {
+        content: [
+          {
+            type: 'text',
+            text:
+              `La sección "${def.title}" ya tiene contenido guardado (${wc} palabras).\n` +
+              `Si quieres reescribirla con el flujo de preguntas guiadas, usa "answer_section_question" para cualquiera ` +
+              `de sus preguntas (esto reemplazará el contenido actual al terminar). Si no, puedes revisarla con "validate_section" ` +
+              `o consultarla con "get_section_content".`,
+          },
+        ],
+      };
+    }
+
+    const next = findNextQuestion(def, sectionData);
+    if (!next) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Ya respondiste todas las preguntas de "${def.title}", pero el contenido no se ensambló. Usa "answer_section_question" de nuevo con cualquier pregunta para regenerarlo.`,
+          },
+        ],
+      };
+    }
+
+    const index = def.questions.findIndex((q) => q.id === next.id);
+    return {
+      content: [
+        {
+          type: 'text',
+          text:
+            `# Pregunta ${index + 1} de ${def.questions.length} — ${def.title}\n\n` +
+            `${next.prompt}\n\n` +
+            `Responde con "answer_section_question" (projectId: "${projectId}", section: "${section}", questionId: "${next.id}").`,
+        },
+      ],
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL: answer_section_question
+// ---------------------------------------------------------------------------
+server.registerTool(
+  'answer_section_question',
+  {
+    title: 'Responder una pregunta de una sección',
+    description:
+      'Guarda la respuesta del investigador a una pregunta específica de una sección. Cuando todas las preguntas ' +
+      'de la sección tienen respuesta, ensambla y guarda automáticamente el contenido, y corre la validación.',
+    inputSchema: {
+      projectId: z.string(),
+      section: sectionEnum,
+      questionId: z.string().describe('id de la pregunta, obtenido de "get_next_question"'),
+      answer: z.string().min(1),
+    },
+  },
+  async ({ projectId, section, questionId, answer }) => {
+    const project = store.getProject(projectId);
+    if (!project) return { content: [{ type: 'text', text: `No existe un proyecto con id "${projectId}".` }], isError: true };
+
+    const def = getSectionDef(section);
+    const question = def.questions.find((q) => q.id === questionId);
+    if (!question) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `questionId "${questionId}" no existe para la sección "${def.title}". IDs válidos: ${def.questions.map((q) => q.id).join(', ')}.`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const sectionData = project.sections[section];
+    sectionData.answers[questionId] = answer;
+    sectionData.updatedAt = new Date().toISOString();
+
+    const next = findNextQuestion(def, sectionData);
+    if (next) {
+      store.saveProject(project);
+      const index = def.questions.findIndex((q) => q.id === next.id);
+      return {
+        content: [
+          {
+            type: 'text',
+            text:
+              `Respuesta guardada (${Object.keys(sectionData.answers).filter((k) => sectionData.answers[k].trim()).length}/${def.questions.length}).\n\n` +
+              `# Pregunta ${index + 1} de ${def.questions.length} — ${def.title}\n\n${next.prompt}`,
+          },
+        ],
+      };
+    }
+
+    // Todas las preguntas respondidas: ensamblar contenido y validar.
+    const assembled = def.questions.map((q) => sectionData.answers[q.id].trim()).join('\n\n');
+    sectionData.content = assembled;
+    const result = validateSection(section, assembled, project);
+    sectionData.lastValidation = result;
+    store.saveProject(project);
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text:
+            `✅ Todas las preguntas de "${def.title}" fueron respondidas. Contenido ensamblado y guardado.\n\n` +
+            `**Borrador ensamblado:**\n${assembled}\n\n` +
+            `${fmtValidation(result)}\n\n` +
+            `Si quieres pulir la redacción (unir frases, mejorar transiciones), puedes reenviar la versión final con "submit_section_content".`,
+        },
+      ],
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
 // TOOL: submit_section_content
 // ---------------------------------------------------------------------------
 server.registerTool(
   'submit_section_content',
   {
-    title: 'Enviar contenido de una sección',
+    title: 'Enviar contenido de una sección (modo libre)',
     description:
-      'Guarda el contenido redactado por el investigador para una sección y ejecuta automáticamente ' +
-      'la validación estructural, devolviendo el reporte.',
+      'Guarda contenido ya redactado por el investigador para una sección (de una sola vez, en modo libre) y ejecuta ' +
+      'automáticamente la validación estructural. Alternativa a "get_next_question"/"answer_section_question" ' +
+      '(el flujo guiado punto por punto); útil cuando el investigador ya trae la sección escrita o quiere ' +
+      'reemplazar el borrador ensamblado por una versión pulida.',
     inputSchema: { projectId: z.string(), section: sectionEnum, content: z.string().min(1) },
   },
   async ({ projectId, section, content }) => {
