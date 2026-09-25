@@ -509,6 +509,120 @@ server.registerTool(
 );
 
 // ---------------------------------------------------------------------------
+// TOOL: get_writing_style_notes
+// ---------------------------------------------------------------------------
+server.registerTool(
+  'get_writing_style_notes',
+  {
+    title: 'Obtener las notas de estilo de redacción del investigador',
+    description:
+      'Devuelve las notas guardadas sobre cómo redacta este investigador (tono, persona gramatical, vocabulario, ' +
+      'largo de oraciones, muletillas). Úsalas antes de proponer una revisión para mantener su voz. Si no hay ' +
+      'notas todavía, lee las secciones ya escritas (con "get_section_content") para inferirlas y guárdalas con ' +
+      '"save_writing_style_notes".',
+    inputSchema: { projectId: z.string() },
+  },
+  async ({ projectId }) => {
+    const project = store.getProject(projectId);
+    if (!project) return notFound(projectId);
+
+    if (!project.styleNotes?.trim()) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text:
+              'Todavía no hay notas de estilo guardadas para este proyecto. Si ya hay secciones redactadas por el ' +
+              'investigador, léelas e infiere su estilo (tono, persona gramatical, vocabulario), luego guárdalo con "save_writing_style_notes".',
+          },
+        ],
+      };
+    }
+    return { content: [{ type: 'text', text: project.styleNotes }] };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL: save_writing_style_notes
+// ---------------------------------------------------------------------------
+server.registerTool(
+  'save_writing_style_notes',
+  {
+    title: 'Guardar notas de estilo de redacción',
+    description:
+      'Guarda (reemplazando lo anterior) las notas sobre el estilo de redacción propio del investigador, para que ' +
+      'futuras revisiones y propuestas de texto mantengan su voz. Estas notas las escribe el asistente tras observar ' +
+      'cómo redacta el investigador (no las escribe el investigador directamente).',
+    inputSchema: { projectId: z.string(), notes: z.string().min(1) },
+  },
+  async ({ projectId, notes }) => {
+    const project = store.getProject(projectId);
+    if (!project) return notFound(projectId);
+
+    project.styleNotes = notes;
+    store.saveProject(project);
+    markdown.writeStyleNotes(project);
+
+    return { content: [{ type: 'text', text: `Notas de estilo guardadas en ${project.projectPath}/estilo-de-redaccion.md.` }] };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL: get_section_review_context
+// ---------------------------------------------------------------------------
+server.registerTool(
+  'get_section_review_context',
+  {
+    title: 'Obtener contexto para revisar y mejorar una sección',
+    description:
+      'Reúne todo lo necesario para que TÚ (el asistente) revises una sección y propongas una redacción mejorada ' +
+      'en la conversación: el contenido actual, la guía de la sección, los problemas/advertencias de la validación ' +
+      'estructural, el contenido de las secciones de las que depende (para coherencia) y las notas de estilo del ' +
+      'investigador. Esta herramienta NO reescribe nada por sí sola. Usa este contexto para proponer cambios en el ' +
+      'chat conservando las ideas y datos del investigador y su voz; guarda la versión que él apruebe con ' +
+      '"submit_section_content". Si no hay notas de estilo, ínfierelas de secciones ya escritas y guárdalas con ' +
+      '"save_writing_style_notes" antes de proponer la revisión.',
+    inputSchema: { projectId: z.string(), section: sectionEnum },
+  },
+  async ({ projectId, section }) => {
+    const project = store.getProject(projectId);
+    if (!project) return notFound(projectId);
+
+    const def = getSectionDef(section);
+    const content = project.sections[section]?.content || '';
+    const validation = content.trim() ? validateSection(section, content, project) : null;
+
+    const lines = [`# Contexto de revisión: ${def.title}`, ''];
+    lines.push('## Contenido actual', content.trim() || '_(vacío)_', '');
+    lines.push('## Guía de la sección', ...def.guidance.map((g) => `- ${g}`), '');
+
+    if (validation) {
+      lines.push('## Validación estructural');
+      if (validation.issues.length) validation.issues.forEach((i) => lines.push(`- ❌ ${i}`));
+      if (validation.warnings.length) validation.warnings.forEach((w) => lines.push(`- ⚠️ ${w}`));
+      if (!validation.issues.length && !validation.warnings.length) lines.push('Sin observaciones.');
+      lines.push('');
+    }
+
+    if (def.dependsOn.length) {
+      lines.push('## Secciones relacionadas (para coherencia)');
+      for (const dep of def.dependsOn) {
+        const depDef = getSectionDef(dep);
+        const depContent = project.sections[dep]?.content || '';
+        lines.push(`### ${depDef.title}`, depContent.trim() || '_(vacío)_', '');
+      }
+    }
+
+    lines.push(
+      '## Notas de estilo del investigador',
+      project.styleNotes?.trim() || '_(sin notas guardadas todavía — inferir de secciones ya escritas y guardar con "save_writing_style_notes")_'
+    );
+
+    return { content: [{ type: 'text', text: lines.join('\n') }] };
+  }
+);
+
+// ---------------------------------------------------------------------------
 // TOOL: add_reference
 // ---------------------------------------------------------------------------
 server.registerTool(
@@ -516,31 +630,203 @@ server.registerTool(
   {
     title: 'Agregar referencia a la biblioteca',
     description:
-      'Agrega una entrada a la biblioteca de referencias bibliográficas del proyecto (carpeta "references/" dentro ' +
-      'de la carpeta del proyecto). Esto NO reemplaza el contenido de la sección "Referencias" del artículo; usa ' +
-      '"generate_references_section" para ensamblarla a partir de la biblioteca.',
+      'Agrega una entrada a la biblioteca de referencias del proyecto (carpeta "references/"). Esto NO reemplaza ' +
+      'el contenido de la sección "Referencias" del artículo; usa "generate_references_section" para eso. ' +
+      'Si se omite "citation", se busca esa "key" en tu biblioteca global (ver "list_global_references") y se ' +
+      'importa desde ahí. Con "saveToGlobalLibrary: true" también queda disponible para sugerirla en otros artículos.',
     inputSchema: {
       projectId: z.string(),
       key: z.string().min(1).describe('Clave corta única para citar esta referencia, ej. "smith2020"'),
-      citation: z.string().min(1).describe('Referencia formateada y legible, en el estilo que uses (APA, IEEE, Vancouver...)'),
+      citation: z.string().optional().describe('Referencia formateada y legible (APA, IEEE, Vancouver...). Si se omite, se importa desde la biblioteca global usando "key".'),
       bibtex: z.string().optional().describe('Entrada BibTeX completa (opcional), útil para la exportación a LaTeX/PDF'),
+      tags: z.array(z.string()).optional().describe('Etiquetas temáticas, ej. ["microplásticos", "coral"], para poder sugerirla en futuros artículos'),
+      saveToGlobalLibrary: z.boolean().optional().describe('Si es true, también guarda/actualiza esta referencia en tu biblioteca global (reutilizable en cualquier proyecto).'),
     },
   },
-  async ({ projectId, key, citation, bibtex }) => {
+  async ({ projectId, key, citation, bibtex, tags, saveToGlobalLibrary }) => {
     const project = store.getProject(projectId);
     if (!project) return notFound(projectId);
 
-    project.bibliography[key] = { citation, bibtex: bibtex || null, addedAt: new Date().toISOString() };
+    let finalCitation = citation;
+    let finalBibtex = bibtex || null;
+    let finalTags = tags || [];
+
+    if (!finalCitation) {
+      const globalEntry = store.getGlobalReference(key);
+      if (!globalEntry) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Falta "citation" y no existe la key "${key}" en tu biblioteca global. Usa "list_global_references" para verla, o incluye "citation" para crear una nueva.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+      finalCitation = globalEntry.citation;
+      finalBibtex = bibtex || globalEntry.bibtex;
+      finalTags = tags || globalEntry.tags || [];
+    }
+
+    project.bibliography[key] = { citation: finalCitation, bibtex: finalBibtex, tags: finalTags, addedAt: new Date().toISOString() };
     store.saveProject(project);
     markdown.writeBibliographyFiles(project);
+
+    if (saveToGlobalLibrary) {
+      store.upsertGlobalReference(key, { citation: finalCitation, bibtex: finalBibtex, tags: finalTags });
+    }
 
     return {
       content: [
         {
           type: 'text',
           text:
-            `Referencia "${key}" guardada (${Object.keys(project.bibliography).length} en total). ` +
+            `Referencia "${key}" guardada en el proyecto (${Object.keys(project.bibliography).length} en total)` +
+            `${saveToGlobalLibrary ? ' y en tu biblioteca global' : ''}. ` +
             `Actualizado: ${project.projectPath}/references/bibliography.bib y referencias.md.`,
+        },
+      ],
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL: list_global_references
+// ---------------------------------------------------------------------------
+server.registerTool(
+  'list_global_references',
+  {
+    title: 'Listar la biblioteca global de referencias',
+    description:
+      'Lista las referencias guardadas en tu biblioteca global (compartida entre todos tus proyectos, no atada a ' +
+      'ninguno en particular), opcionalmente filtradas por etiqueta. Para usar una en un proyecto concreto, usa ' +
+      '"add_reference" con esa misma "key" (sin "citation": se importa automáticamente).',
+    inputSchema: { tag: z.string().optional().describe('Filtra por etiqueta (coincidencia parcial, sin distinguir mayúsculas/minúsculas)') },
+  },
+  async ({ tag }) => {
+    const lib = store.listGlobalReferences();
+    let entries = Object.entries(lib);
+    if (tag) {
+      const needle = tag.toLowerCase();
+      entries = entries.filter(([, e]) => (e.tags || []).some((t) => t.toLowerCase().includes(needle)));
+    }
+    if (entries.length === 0) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: tag
+              ? `No hay referencias globales con la etiqueta "${tag}".`
+              : 'Tu biblioteca global está vacía. Agrega referencias desde cualquier proyecto con "add_reference" (saveToGlobalLibrary: true).',
+          },
+        ],
+      };
+    }
+    const text = entries
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, e]) => `- **[${k}]** ${e.citation}${e.tags?.length ? ` _(tags: ${e.tags.join(', ')})_` : ''}`)
+      .join('\n');
+    return { content: [{ type: 'text', text }] };
+  }
+);
+
+function tokenize(text) {
+  return (text || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length > 4);
+}
+
+function scoreOverlap(queryTokens, candidateText) {
+  const candidateTokens = new Set(tokenize(candidateText));
+  if (candidateTokens.size === 0) return 0;
+  return queryTokens.filter((t) => candidateTokens.has(t)).length;
+}
+
+// ---------------------------------------------------------------------------
+// TOOL: suggest_references
+// ---------------------------------------------------------------------------
+server.registerTool(
+  'suggest_references',
+  {
+    title: 'Sugerir referencias para una sección o necesidad puntual',
+    description:
+      'Busca en tu biblioteca global y en la del proyecto referencias potencialmente relevantes, ordenadas por ' +
+      'solapamiento léxico con "query" (o con el título/guía/contenido de "section" si no se da "query"). Es una ' +
+      'heurística de palabras clave, no una búsqueda semántica: úsala como punto de partida y confirma con el ' +
+      'investigador la pertinencia real de cada referencia antes de citarla.',
+    inputSchema: {
+      projectId: z.string(),
+      section: sectionEnum.optional().describe('Sección para la que se buscan referencias (se usa su guía/contenido como base si no se da "query")'),
+      query: z.string().optional().describe('Descripción libre de lo que necesitas respaldar, ej. "efecto de microplásticos en larvas de coral"'),
+    },
+  },
+  async ({ projectId, section, query }) => {
+    const project = store.getProject(projectId);
+    if (!project) return notFound(projectId);
+
+    let baseText = query || '';
+    if (!baseText && section) {
+      const def = getSectionDef(section);
+      baseText = [def.title, ...def.guidance, project.sections[section]?.content || ''].join(' ');
+    }
+    if (!baseText.trim()) {
+      return { content: [{ type: 'text', text: 'Indica "query" o "section" para poder sugerir referencias relevantes.' }], isError: true };
+    }
+
+    const queryTokens = tokenize(baseText);
+    const globalLib = store.listGlobalReferences();
+    const projectBib = project.bibliography || {};
+    const allKeys = new Set([...Object.keys(globalLib), ...Object.keys(projectBib)]);
+
+    const ranked = Array.from(allKeys)
+      .map((key) => {
+        const entry = globalLib[key] || projectBib[key];
+        const searchable = `${entry.citation} ${(entry.tags || []).join(' ')}`;
+        return {
+          key,
+          citation: entry.citation,
+          tags: entry.tags || [],
+          inProject: Boolean(projectBib[key]),
+          score: scoreOverlap(queryTokens, searchable),
+        };
+      })
+      .filter((c) => c.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8);
+
+    if (ranked.length === 0) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text:
+              'No se encontraron referencias con solapamiento léxico relevante en tu biblioteca global ni en la del proyecto. ' +
+              'Agrega referencias con "add_reference" (usa "tags" y "saveToGlobalLibrary: true" para que aparezcan en futuras sugerencias).',
+          },
+        ],
+      };
+    }
+
+    const text = ranked
+      .map(
+        (c) =>
+          `- **[${c.key}]** (score ${c.score}${c.inProject ? ', ya en este proyecto' : ', en biblioteca global'}) ${c.citation}` +
+          `${c.tags.length ? ` _(tags: ${c.tags.join(', ')})_` : ''}`
+      )
+      .join('\n');
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text:
+            `Sugerencias para "${query || getSectionDef(section).title}":\n\n${text}\n\n` +
+            `Para usar en este proyecto una que no esté aquí todavía: "add_reference" con esa misma "key" (sin "citation", se importa de la biblioteca global).`,
         },
       ],
     };

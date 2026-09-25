@@ -20,6 +20,7 @@ const { SECTION_KEYS } = require('./schema');
 
 const BASE_DIR = path.join(os.homedir(), '.scientific-article-mcp');
 const INDEX_FILE = path.join(BASE_DIR, 'index.json');
+const GLOBAL_LIBRARY_FILE = path.join(BASE_DIR, 'global-library.json');
 
 function ensureBaseDir() {
   if (!fs.existsSync(BASE_DIR)) {
@@ -66,6 +67,7 @@ function slugify(text) {
 /** Rellena campos que puedan faltar en proyectos guardados con una versión anterior del schema. */
 function normalizeProject(project) {
   if (!project.bibliography) project.bibliography = {};
+  if (typeof project.styleNotes !== 'string') project.styleNotes = '';
   for (const key of SECTION_KEYS) {
     if (!project.sections[key]) {
       project.sections[key] = { content: '', answers: {}, lastValidation: null, updatedAt: null };
@@ -110,6 +112,7 @@ function createProject({ title, articleType = 'IMRaD', researchField = null, pro
     updatedAt: now,
     sections,
     bibliography: {},
+    styleNotes: '',
   };
 
   saveProject(project);
@@ -171,6 +174,47 @@ function listProjects() {
   return list.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
 }
 
+/**
+ * Biblioteca global de referencias: vive fuera de cualquier proyecto puntual
+ * (en BASE_DIR), para poder reutilizar referencias entre distintos artículos.
+ */
+function loadGlobalLibrary() {
+  ensureBaseDir();
+  if (!fs.existsSync(GLOBAL_LIBRARY_FILE)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(GLOBAL_LIBRARY_FILE, 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+function saveGlobalLibrary(lib) {
+  ensureBaseDir();
+  fs.writeFileSync(GLOBAL_LIBRARY_FILE, JSON.stringify(lib, null, 2), 'utf-8');
+}
+
+function getGlobalReference(key) {
+  return loadGlobalLibrary()[key] || null;
+}
+
+function listGlobalReferences() {
+  return loadGlobalLibrary();
+}
+
+function upsertGlobalReference(key, { citation, bibtex = null, tags = [] }) {
+  const lib = loadGlobalLibrary();
+  const now = new Date().toISOString();
+  lib[key] = {
+    citation,
+    bibtex: bibtex || null,
+    tags,
+    addedAt: lib[key]?.addedAt || now,
+    updatedAt: now,
+  };
+  saveGlobalLibrary(lib);
+  return lib[key];
+}
+
 module.exports = {
   createProject,
   getProject,
@@ -178,5 +222,8 @@ module.exports = {
   listProjects,
   findProjectAtPath,
   expandPath,
+  getGlobalReference,
+  listGlobalReferences,
+  upsertGlobalReference,
   BASE_DIR,
 };

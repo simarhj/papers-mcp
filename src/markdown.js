@@ -39,6 +39,7 @@ Proyecto de artículo científico gestionado con **scientific-article-guide (MCP
 - \`data/\` — datos crudos o procesados.
 - \`export/\` — versiones exportadas del artículo (LaTeX, PDF, Word), generadas con las herramientas de exportación del MCP.
 - \`templates/\` — plantilla Word (\`word-template.docx\`) subida con "set_word_template"; si existe, la exportación a Word hereda sus estilos (fuentes, márgenes, encabezados).
+- \`estilo-de-redaccion.md\` — notas sobre tu estilo de redacción (tono, persona gramatical, vocabulario), usadas para que las revisiones propuestas por el asistente mantengan tu voz.
 - \`.article-mcp/\` — estado interno del MCP (respuestas guardadas, validaciones). No editar a mano.
 
 **El formato oficial de trabajo es Markdown.** Para redactar, usa las herramientas del MCP
@@ -113,9 +114,15 @@ function writeBibliographyFiles(project) {
   } else {
     entries
       .sort(([a], [b]) => a.localeCompare(b))
-      .forEach(([key, e]) => mdLines.push(`- **[${key}]** ${e.citation}`));
+      .forEach(([key, e]) => mdLines.push(`- **[${key}]** ${e.citation}${e.tags?.length ? ` _(tags: ${e.tags.join(', ')})_` : ''}`));
   }
   fs.writeFileSync(path.join(dir, 'referencias.md'), mdLines.join('\n') + '\n', 'utf-8');
+}
+
+/** Mirror legible de las notas de estilo guardadas, para que el investigador también pueda verlas. */
+function writeStyleNotes(project) {
+  const text = `# Notas de estilo de redacción\n\n${project.styleNotes?.trim() || '_(sin notas guardadas todavía)_'}\n`;
+  fs.writeFileSync(path.join(project.projectPath, 'estilo-de-redaccion.md'), text, 'utf-8');
 }
 
 module.exports = {
@@ -124,6 +131,7 @@ module.exports = {
   writeArticleFile,
   writeSectionFile,
   writeBibliographyFiles,
+  writeStyleNotes,
   buildArticleMarkdown,
   sectionFileName,
 };

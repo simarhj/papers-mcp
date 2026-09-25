@@ -4,6 +4,7 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const { execFileSync } = require('child_process');
+const store = require('../src/store');
 
 async function callTool(client, name, args) {
   const res = await client.callTool({ name, arguments: args });
@@ -127,19 +128,64 @@ async function main() {
 
   await callTool(client, 'get_project_status', { projectId });
 
-  // --- Biblioteca de referencias ---
+  // --- Asistencia de redacción: notas de estilo + contexto de revisión ---
+  await callTool(client, 'get_writing_style_notes', { projectId });
+  await callTool(client, 'save_writing_style_notes', {
+    projectId,
+    notes: 'Escribe en primera persona del plural ("nosotros"), tono formal-directo, oraciones de longitud media, evita anglicismos.',
+  });
+  const styleNotesRes = await callTool(client, 'get_writing_style_notes', { projectId });
+  if (!/primera persona del plural/.test(styleNotesRes)) {
+    throw new Error('get_writing_style_notes no devolvió las notas guardadas.');
+  }
+  const styleFile = path.join(projectPath, 'estilo-de-redaccion.md');
+  if (!fs.existsSync(styleFile) || !/primera persona del plural/.test(fs.readFileSync(styleFile, 'utf-8'))) {
+    throw new Error(`estilo-de-redaccion.md no se generó correctamente en: ${styleFile}`);
+  }
+
+  const reviewContextRes = await callTool(client, 'get_section_review_context', { projectId, section: 'introduction' });
+  if (!/Notas de estilo del investigador/.test(reviewContextRes) || !/primera persona del plural/.test(reviewContextRes)) {
+    throw new Error('get_section_review_context no incluyó las notas de estilo.');
+  }
+  console.log('\n✅ Notas de estilo guardadas y usadas correctamente en el contexto de revisión.');
+
+  // --- Biblioteca de referencias (proyecto + biblioteca global) ---
   await callTool(client, 'list_references', { projectId });
   await callTool(client, 'add_reference', {
     projectId,
     key: 'garcia2019',
     citation: 'García, M. (2019). Impacto de microplásticos en ecosistemas coralinos. Revista de Biología Marina, 45(2), 123-140.',
     bibtex: '@article{garcia2019,\n  title={Impacto de microplásticos en ecosistemas coralinos},\n  author={García, M.},\n  year={2019}\n}',
+    tags: ['microplasticos', 'coral'],
+    saveToGlobalLibrary: true,
   });
   await callTool(client, 'add_reference', {
     projectId,
     key: 'lopez2021',
     citation: 'López, R. (2021). Contaminación plástica en arrecifes. Ciencia y Mar, 12(1), 55-70.',
   });
+
+  // Simula una referencia que ya estaba en la biblioteca global de un proyecto anterior
+  store.upsertGlobalReference('preexisting2018', {
+    citation: 'Pérez, J. (2018). Efectos crónicos de plásticos en invertebrados marinos. Oceanografía Aplicada, 8(1), 10-25.',
+    tags: ['microplasticos', 'invertebrados'],
+  });
+
+  // Importar desde la biblioteca global omitiendo "citation"
+  const importRes = await callTool(client, 'add_reference', { projectId, key: 'preexisting2018' });
+  if (!/guardada en el proyecto/.test(importRes)) {
+    throw new Error('No se pudo importar la referencia "preexisting2018" desde la biblioteca global.');
+  }
+
+  // Key inexistente y sin citation: debe devolver error controlado, no lanzar excepción
+  await callTool(client, 'add_reference', { projectId, key: 'no-existe-en-ningun-lado' });
+
+  await callTool(client, 'list_global_references', {});
+  await callTool(client, 'list_global_references', { tag: 'coral' });
+
+  await callTool(client, 'suggest_references', { projectId, query: 'microplásticos en invertebrados marinos' });
+  await callTool(client, 'suggest_references', { projectId, section: 'discussion' });
+
   await callTool(client, 'list_references', { projectId });
   await callTool(client, 'generate_references_section', { projectId });
 

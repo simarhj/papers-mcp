@@ -50,7 +50,7 @@ Agrega esta entrada (ajusta la ruta absoluta a donde clonaste el proyecto):
 ```
 
 Reinicia Claude Desktop. Deberías ver el ícono de herramientas (🔨) con
-18 tools disponibles bajo "scientific-article-guide".
+23 tools disponibles bajo "scientific-article-guide".
 
 ## 3. Flujo de uso típico
 
@@ -120,8 +120,13 @@ contenido real vive siempre en tu carpeta.
 | `validate_section` | Re-valida una sección ya guardada |
 | `validate_full_article` | Validación cruzada de todo el artículo (bloquea si faltan secciones obligatorias) |
 | `get_section_content` | Recupera el texto guardado de una sección |
-| `add_reference` | Agrega una entrada a la biblioteca de referencias del proyecto |
-| `list_references` | Lista las referencias guardadas en la biblioteca |
+| `get_writing_style_notes` | Devuelve las notas guardadas sobre el estilo de redacción del investigador |
+| `save_writing_style_notes` | Guarda las notas de estilo (las escribe el asistente, no el investigador) |
+| `get_section_review_context` | Reúne contenido + guía + validación + notas de estilo para que el asistente revise/proponga una redacción mejorada |
+| `add_reference` | Agrega una entrada a la biblioteca de referencias del proyecto (o la importa de tu biblioteca global) |
+| `list_global_references` | Lista tu biblioteca global de referencias (reutilizable entre proyectos) |
+| `suggest_references` | Sugiere referencias (globales o del proyecto) relevantes para una sección o necesidad puntual |
+| `list_references` | Lista las referencias guardadas en la biblioteca del proyecto |
 | `generate_references_section` | Ensambla la sección "Referencias" a partir de la biblioteca |
 | `export_markdown` | Fuerza la regeneración de todos los archivos Markdown del proyecto |
 | `set_word_template` | Sube un `.docx` para usar sus estilos como plantilla en `export_to_word` |
@@ -129,7 +134,36 @@ contenido real vive siempre en tu carpeta.
 | `export_to_pdf` | Exporta `article.md` a `export/article.pdf` (requiere `pandoc` + motor LaTeX) |
 | `export_to_word` | Exporta `article.md` a `export/article.docx` (requiere `pandoc`; usa la plantilla si hay una) |
 
-## 4.1. Secciones obligatorias
+## 4.1. Asistencia de redacción (usando al asistente, no un modelo dentro del MCP)
+
+El servidor en sí no tiene ningún modelo de lenguaje adentro; sigue sin generar contenido científico por ti. Lo
+que sí hace es reunir el contexto necesario para que **tú, conversando con el asistente**, revises y mejores la
+redacción manteniendo la voz propia del investigador:
+
+1. Si el investigador ya escribió algo, pídele al asistente que infiera su estilo (tono, persona gramatical,
+   vocabulario, largo de oraciones) y lo guarde con `save_writing_style_notes`.
+2. Cuando quieras revisar una sección, usa `get_section_review_context`: te devuelve el contenido actual, la
+   guía de esa sección, los problemas de la validación estructural, el contenido de las secciones de las que
+   depende (para coherencia) y las notas de estilo guardadas.
+3. El asistente propone la revisión **en la conversación** (no la escribe sola esta herramienta). Solo si el
+   investigador la aprueba, se guarda con `submit_section_content`.
+
+Las notas de estilo quedan también en `estilo-de-redaccion.md` dentro de la carpeta del proyecto, por transparencia.
+
+## 4.2. Biblioteca global de referencias y sugerencias
+
+Además de la biblioteca por proyecto (`references/` dentro de cada carpeta), existe una **biblioteca global**
+en `~/.scientific-article-mcp/global-library.json`, reutilizable entre artículos distintos:
+
+- `add_reference` con `saveToGlobalLibrary: true` (y opcionalmente `tags`) guarda una referencia también ahí.
+- En cualquier otro proyecto, `add_reference` con esa misma `key` (sin `citation`) la importa desde la biblioteca global.
+- `list_global_references` (con `tag` opcional) lista lo que tienes guardado.
+- `suggest_references` busca en la biblioteca global y en la del proyecto actual, y ordena los resultados por
+  solapamiento léxico con una consulta libre (`query`) o con la guía/contenido de una `section`. Es una heurística
+  de palabras clave (igual que el resto de las validaciones de este MCP), no una búsqueda semántica: úsala como
+  punto de partida y confirma la pertinencia real con el investigador antes de citar.
+
+## 4.3. Secciones obligatorias
 
 Por defecto, **las 9 secciones IMRaD son obligatorias**: `validate_full_article` marca el artículo como
 incompleto (❌ bloqueante) mientras alguna tenga contenido vacío. Puedes eximir una sección puntual marcándola
