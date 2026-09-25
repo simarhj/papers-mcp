@@ -20,9 +20,28 @@ const PDF_ENGINE_HINT =
   'Para exportar a PDF, pandoc además necesita un motor LaTeX instalado (ej. "brew install --cask basictex" en macOS, ' +
   'o "sudo apt install texlive-latex-base" en Linux), o puedes reintentar indicando otro motor si tienes uno disponible.';
 
+// Apps de escritorio como Claude Desktop lanzan el servidor MCP con un PATH
+// mínimo (heredado de launchd), que normalmente NO incluye dónde Homebrew o
+// una instalación de TeX ponen sus binarios. pandoc además necesita poder
+// encontrar pdflatex por su cuenta (lo invoca como subproceso), así que estas
+// rutas se agregan al PATH del propio proceso hijo, no solo para localizar pandoc.
+const EXTRA_PATH_DIRS = [
+  '/opt/homebrew/bin',
+  '/usr/local/bin',
+  '/Library/TeX/texbin',
+  '/usr/local/texlive/2026basic/bin/universal-darwin',
+  '/usr/local/texlive/2025basic/bin/universal-darwin',
+];
+
+function buildEnv() {
+  const currentPath = process.env.PATH || '';
+  const dirs = EXTRA_PATH_DIRS.filter((d) => fs.existsSync(d) && !currentPath.split(path.delimiter).includes(d));
+  return { ...process.env, PATH: [currentPath, ...dirs].filter(Boolean).join(path.delimiter) };
+}
+
 function runPandoc(args) {
   return new Promise((resolve) => {
-    execFile('pandoc', args, { maxBuffer: 1024 * 1024 * 20 }, (error, stdout, stderr) => {
+    execFile('pandoc', args, { maxBuffer: 1024 * 1024 * 20, env: buildEnv() }, (error, stdout, stderr) => {
       if (error) {
         if (error.code === 'ENOENT') {
           resolve({ ok: false, error: INSTALL_HINT });

@@ -172,6 +172,11 @@ sudo apt install pandoc texlive-latex-base   # texlive solo para PDF
 Si `pandoc` (o, para PDF, un motor LaTeX) no está instalado, las herramientas `export_to_latex`/`export_to_pdf`/
 `export_to_word` devuelven un mensaje explicando qué falta instalar, en vez de fallar de forma críptica.
 
+**Nota (macOS/Claude Desktop):** las apps de escritorio lanzan procesos con un `PATH` mínimo que no incluye las
+rutas de Homebrew ni de TeX, aunque en tu terminal sí las tengas. El servidor ya agrega automáticamente
+`/opt/homebrew/bin`, `/usr/local/bin` y `/Library/TeX/texbin` al `PATH` del proceso que invoca a `pandoc`
+(ver `src/exporters.js`), así que no deberías tener que hacer nada adicional tras instalarlos con Homebrew.
+
 ## 8. Pruebas
 
 Hay un test end-to-end que levanta el servidor real vía stdio y ejercita el
