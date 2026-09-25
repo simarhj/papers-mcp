@@ -6,6 +6,8 @@
  * artículos científicos con estructura IMRaD, con persistencia local.
  */
 
+const fs = require('fs');
+const path = require('path');
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
 const { z } = require('zod');
@@ -619,6 +621,59 @@ server.registerTool(
 );
 
 // ---------------------------------------------------------------------------
+// TOOL: set_word_template
+// ---------------------------------------------------------------------------
+server.registerTool(
+  'set_word_template',
+  {
+    title: 'Usar un Word como plantilla de formato',
+    description:
+      'Sube un archivo .docx (ej. la plantilla oficial de una universidad o revista) para usarlo como plantilla ' +
+      'de formato en la exportación a Word: "export_to_word" heredará sus estilos (fuentes, márgenes, encabezados, ' +
+      'numeración) en vez de usar el estilo por defecto de pandoc. El contenido del .docx que subas se ignora; ' +
+      'solo se usan sus estilos.',
+    inputSchema: {
+      projectId: z.string(),
+      templatePath: z
+        .string()
+        .min(1)
+        .describe('Ruta absoluta (o con "~") al archivo .docx que se usará como plantilla de estilos.'),
+    },
+  },
+  async ({ projectId, templatePath }) => {
+    const project = store.getProject(projectId);
+    if (!project) return notFound(projectId);
+
+    const resolved = store.expandPath(templatePath);
+    if (!fs.existsSync(resolved)) {
+      return { content: [{ type: 'text', text: `No se encontró el archivo: ${resolved}` }], isError: true };
+    }
+    if (path.extname(resolved).toLowerCase() !== '.docx') {
+      return {
+        content: [{ type: 'text', text: `El archivo debe ser un .docx (Word). Recibido: ${path.extname(resolved) || '(sin extensión)'}.` }],
+        isError: true,
+      };
+    }
+
+    const dest = exporters.wordTemplatePath(project);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.copyFileSync(resolved, dest);
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text:
+            `Plantilla Word guardada en ${dest}.\n` +
+            `A partir de ahora, "export_to_word" usará sus estilos (fuentes, márgenes, encabezados). ` +
+            `El contenido del artículo sigue viniendo de article.md; solo se toma el formato de esta plantilla.`,
+        },
+      ],
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
 // TOOL: export_markdown
 // ---------------------------------------------------------------------------
 server.registerTool(
@@ -661,7 +716,8 @@ async function handleExport(projectId, format, label) {
   if (!result.ok) {
     return { content: [{ type: 'text', text: `No se pudo exportar a ${label}:\n\n${result.error}` }], isError: true };
   }
-  return { content: [{ type: 'text', text: `Exportado a ${label}: ${result.outputPath}` }] };
+  const templateNote = result.usedTemplate ? ' (con la plantilla Word del proyecto)' : '';
+  return { content: [{ type: 'text', text: `Exportado a ${label}${templateNote}: ${result.outputPath}` }] };
 }
 
 // ---------------------------------------------------------------------------

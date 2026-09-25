@@ -11,7 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const { IMRAD_SECTIONS, getSectionDef } = require('./schema');
 
-const PROJECT_DIRS = ['sections', 'references', 'figures', 'data', 'export', '.article-mcp'];
+const PROJECT_DIRS = ['sections', 'references', 'figures', 'data', 'export', 'templates', '.article-mcp'];
 
 function sectionFileName(def) {
   return `${String(def.order).padStart(2, '0')}-${def.key}.md`;
@@ -38,6 +38,7 @@ Proyecto de artículo científico gestionado con **scientific-article-guide (MCP
 - \`figures/\` — figuras, gráficas e imágenes del artículo.
 - \`data/\` — datos crudos o procesados.
 - \`export/\` — versiones exportadas del artículo (LaTeX, PDF, Word), generadas con las herramientas de exportación del MCP.
+- \`templates/\` — plantilla Word (\`word-template.docx\`) subida con "set_word_template"; si existe, la exportación a Word hereda sus estilos (fuentes, márgenes, encabezados).
 - \`.article-mcp/\` — estado interno del MCP (respuestas guardadas, validaciones). No editar a mano.
 
 **El formato oficial de trabajo es Markdown.** Para redactar, usa las herramientas del MCP

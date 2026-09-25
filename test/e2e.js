@@ -3,6 +3,7 @@ const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const { execFileSync } = require('child_process');
 
 async function callTool(client, name, args) {
   const res = await client.callTool({ name, arguments: args });
@@ -165,6 +166,46 @@ async function main() {
   await callTool(client, 'export_to_latex', { projectId });
   await callTool(client, 'export_to_pdf', { projectId });
   await callTool(client, 'export_to_word', { projectId });
+
+  // --- Plantilla Word (set_word_template) ---
+  const templateFixturesDir = path.join(os.tmpdir(), `sam-template-fixtures-${Date.now()}`);
+  fs.mkdirSync(templateFixturesDir, { recursive: true });
+
+  // Ruta inexistente: debe devolver error controlado
+  await callTool(client, 'set_word_template', {
+    projectId,
+    templatePath: path.join(templateFixturesDir, 'no-existe.docx'),
+  });
+
+  // Extensión incorrecta: debe devolver error controlado
+  const wrongExtPath = path.join(templateFixturesDir, 'plantilla.txt');
+  fs.writeFileSync(wrongExtPath, 'esto no es un docx');
+  await callTool(client, 'set_word_template', { projectId, templatePath: wrongExtPath });
+
+  // Plantilla real: generamos un .docx válido con el propio pandoc (si está disponible) y la usamos
+  const realTemplatePath = path.join(templateFixturesDir, 'plantilla.docx');
+  let pandocAvailable = true;
+  try {
+    execFileSync('pandoc', ['-o', realTemplatePath, '--print-default-data-file', 'reference.docx']);
+  } catch {
+    pandocAvailable = false;
+  }
+
+  if (pandocAvailable) {
+    await callTool(client, 'set_word_template', { projectId, templatePath: realTemplatePath });
+    const savedTemplate = path.join(projectPath, 'templates', 'word-template.docx');
+    if (!fs.existsSync(savedTemplate)) throw new Error(`La plantilla no se copió a: ${savedTemplate}`);
+
+    const wordWithTemplateRes = await callTool(client, 'export_to_word', { projectId });
+    if (!/con la plantilla Word del proyecto/.test(wordWithTemplateRes)) {
+      throw new Error('export_to_word no reportó haber usado la plantilla Word del proyecto.');
+    }
+    console.log('\n✅ Plantilla Word aplicada correctamente en la exportación.');
+  } else {
+    console.log('\n⚠️ pandoc no disponible: se omite la verificación de plantilla real (solo se probaron los errores).');
+  }
+
+  fs.rmSync(templateFixturesDir, { recursive: true, force: true });
 
   await client.close();
   fs.rmSync(projectPath, { recursive: true, force: true });

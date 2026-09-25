@@ -50,7 +50,7 @@ Agrega esta entrada (ajusta la ruta absoluta a donde clonaste el proyecto):
 ```
 
 Reinicia Claude Desktop. Deberías ver el ícono de herramientas (🔨) con
-17 tools disponibles bajo "scientific-article-guide".
+18 tools disponibles bajo "scientific-article-guide".
 
 ## 3. Flujo de uso típico
 
@@ -124,9 +124,10 @@ contenido real vive siempre en tu carpeta.
 | `list_references` | Lista las referencias guardadas en la biblioteca |
 | `generate_references_section` | Ensambla la sección "Referencias" a partir de la biblioteca |
 | `export_markdown` | Fuerza la regeneración de todos los archivos Markdown del proyecto |
+| `set_word_template` | Sube un `.docx` para usar sus estilos como plantilla en `export_to_word` |
 | `export_to_latex` | Exporta `article.md` a `export/article.tex` (requiere `pandoc`) |
 | `export_to_pdf` | Exporta `article.md` a `export/article.pdf` (requiere `pandoc` + motor LaTeX) |
-| `export_to_word` | Exporta `article.md` a `export/article.docx` (requiere `pandoc`) |
+| `export_to_word` | Exporta `article.md` a `export/article.docx` (requiere `pandoc`; usa la plantilla si hay una) |
 
 ## 4.1. Secciones obligatorias
 
@@ -176,6 +177,29 @@ Si `pandoc` (o, para PDF, un motor LaTeX) no está instalado, las herramientas `
 rutas de Homebrew ni de TeX, aunque en tu terminal sí las tengas. El servidor ya agrega automáticamente
 `/opt/homebrew/bin`, `/usr/local/bin` y `/Library/TeX/texbin` al `PATH` del proceso que invoca a `pandoc`
 (ver `src/exporters.js`), así que no deberías tener que hacer nada adicional tras instalarlos con Homebrew.
+
+## 7.1. Usar una plantilla Word (ej. la de tu universidad o revista)
+
+Si necesitas entregar el artículo en el formato exacto de una plantilla institucional (fuente, márgenes, estilos
+de encabezado, numeración), sube ese `.docx` con **`set_word_template`**:
+
+```
+set_word_template({ projectId, templatePath: "/ruta/a/plantilla-de-la-revista.docx" })
+```
+
+Esto copia el archivo a `templates/word-template.docx` dentro de la carpeta del proyecto. A partir de ahí, cada
+vez que uses `export_to_word`, pandoc generará el `.docx` **con el contenido de tu artículo pero con los estilos
+de esa plantilla** (usa el mecanismo `--reference-doc` de pandoc). El texto de la plantilla en sí no se usa, solo
+sus estilos con nombre (Title, Heading 1, Heading 2, Body Text, etc.).
+
+Si la plantilla que te dieron no produce el resultado esperado (por ejemplo, porque sus estilos no siguen esos
+nombres), una alternativa es generar primero una plantilla base editable con:
+
+```bash
+pandoc -o reference.docx --print-default-data-file reference.docx
+```
+
+y ajustar ahí manualmente las fuentes/márgenes/estilos antes de subirla con `set_word_template`.
 
 ## 8. Pruebas
 

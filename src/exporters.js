@@ -57,6 +57,13 @@ function runPandoc(args) {
 
 const EXT_BY_FORMAT = { latex: 'tex', pdf: 'pdf', docx: 'docx' };
 
+const WORD_TEMPLATE_FILENAME = 'word-template.docx';
+
+/** Ruta donde vive la plantilla Word del proyecto (reference-doc de pandoc), si el investigador subió una. */
+function wordTemplatePath(project) {
+  return path.join(project.projectPath, 'templates', WORD_TEMPLATE_FILENAME);
+}
+
 /** Exporta project.projectPath/article.md al formato indicado ('latex' | 'pdf' | 'docx'). */
 async function exportArticle(project, format) {
   const ext = EXT_BY_FORMAT[format];
@@ -71,13 +78,22 @@ async function exportArticle(project, format) {
   const args = [src, '-o', out, '--standalone'];
   if (format === 'latex') args.push('--to=latex');
 
+  let usedTemplate = false;
+  if (format === 'docx') {
+    const templatePath = wordTemplatePath(project);
+    if (fs.existsSync(templatePath)) {
+      args.push(`--reference-doc=${templatePath}`);
+      usedTemplate = true;
+    }
+  }
+
   const result = await runPandoc(args);
 
   if (!result.ok && format === 'pdf' && /pdf-engine|pdflatex|xelatex|lualatex/i.test(result.error)) {
     result.error = `${result.error}\n\n${PDF_ENGINE_HINT}`;
   }
 
-  return { ...result, outputPath: out };
+  return { ...result, outputPath: out, usedTemplate };
 }
 
-module.exports = { exportArticle };
+module.exports = { exportArticle, wordTemplatePath, WORD_TEMPLATE_FILENAME };
